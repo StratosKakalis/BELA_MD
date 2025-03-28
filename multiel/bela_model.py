@@ -117,7 +117,114 @@ class ModelEval:
 
         return scores.squeeze(-1).to(self.device), indices.squeeze(-1).to(self.device)
 
-    def process_batch(self, texts): 
+    # def process_batch(self, texts): 
+    #     batch: Dict[str, Any] = {"texts": texts}
+    #     model_inputs = self.transform(batch)
+
+    #     token_ids = model_inputs["input_ids"].to(self.device)
+    #     text_pad_mask = model_inputs["attention_mask"].to(self.device)
+    #     tokens_mapping = model_inputs["tokens_mapping"].to(self.device)
+    #     sp_tokens_boundaries = model_inputs["sp_tokens_boundaries"].tolist()
+
+    #     with torch.no_grad():
+    #         _, last_layer = self.task.encoder(token_ids)
+    #         text_encodings = last_layer
+    #         text_encodings = self.task.project_encoder_op(text_encodings)
+
+    #         mention_logits, mention_bounds = self.task.mention_encoder(
+    #             text_encodings, text_pad_mask, tokens_mapping
+    #         )
+
+    #         (
+    #             chosen_mention_logits,
+    #             chosen_mention_bounds,
+    #             chosen_mention_mask,
+    #             mention_pos_mask,
+    #         ) = self.task.mention_encoder.prune_ctxt_mentions(
+    #             mention_logits,
+    #             mention_bounds,
+    #             num_cand_mentions=50,
+    #             threshold=self.task.md_threshold,
+    #         )
+
+    #         mention_offsets = chosen_mention_bounds[:, :, 0]
+    #         mention_lengths = (
+    #             chosen_mention_bounds[:, :, 1] - chosen_mention_bounds[:, :, 0] + 1
+    #         )
+    #         mention_lengths[mention_offsets == 0] = 0
+
+    #         mentions_repr = self.task.span_encoder(
+    #             text_encodings, mention_offsets, mention_lengths
+    #         )
+
+    #         # flat mentions and entities indices (mentions_num x embedding_dim)
+    #         flat_mentions_repr = mentions_repr[mention_lengths != 0]
+    #         mentions_scores = torch.sigmoid(chosen_mention_logits)
+
+    #         # retrieve candidates top-1 ids and scores
+    #         cand_scores, cand_indices = self.lookup(
+    #             flat_mentions_repr.detach()
+    #         )
+
+    #         entities_repr = self.embeddings[cand_indices.to(self.embeddings.device)].to(self.device)
+
+    #         chosen_mention_limits: List[int] = (
+    #             chosen_mention_mask.int().sum(-1).detach().cpu().tolist()
+    #         )
+    #         flat_mentions_scores = mentions_scores[mention_lengths != 0].unsqueeze(-1)
+    #         cand_scores = cand_scores.unsqueeze(-1)
+
+    #         el_scores = torch.sigmoid(
+    #             self.task.el_encoder(
+    #                 flat_mentions_repr,
+    #                 entities_repr,
+    #                 flat_mentions_scores,
+    #                 cand_scores,
+    #             )
+    #         ).squeeze(1)
+
+    #     predictions = []
+    #     cand_idx = 0
+    #     example_idx = 0
+    #     for offsets, lengths, md_scores in zip(
+    #         mention_offsets, mention_lengths, mentions_scores
+    #     ):
+    #         ex_sp_offsets = []
+    #         ex_sp_lengths = []
+    #         ex_entities = []
+    #         ex_md_scores = []
+    #         ex_el_scores = []
+    #         for offset, length, md_score in zip(offsets, lengths, md_scores):
+    #             if length != 0:
+    #                 if md_score >= self.task.md_threshold:
+    #                     ex_sp_offsets.append(offset.detach().cpu().item())
+    #                     ex_sp_lengths.append(length.detach().cpu().item())
+    #                     ex_entities.append(self.ent_idx[cand_indices[cand_idx].detach().cpu().item()])
+    #                     ex_md_scores.append(md_score.item())       
+    #                     ex_el_scores.append(el_scores[cand_idx].item())     
+    #                 cand_idx += 1
+
+    #         char_offsets, char_lengths = convert_sp_to_char_offsets(
+    #             texts[example_idx],
+    #             ex_sp_offsets,
+    #             ex_sp_lengths,
+    #             sp_tokens_boundaries[example_idx],
+    #         )
+
+    #         predictions.append(
+    #             {
+    #                 "offsets": char_offsets,
+    #                 "lengths": char_lengths,
+    #                 "entities": ex_entities,
+    #                 "md_scores": ex_md_scores,
+    #                 "el_scores": ex_el_scores,
+    #             }
+    #         )
+    #         example_idx += 1
+
+    #     return predictions
+
+    def process_batch(self, texts):
         batch: Dict[str, Any] = {"texts": texts}
         model_inputs = self.transform(batch)
 
@@ -153,56 +260,20 @@ class ModelEval:
             )
             mention_lengths[mention_offsets == 0] = 0
 
-            mentions_repr = self.task.span_encoder(
-                text_encodings, mention_offsets, mention_lengths
-            )
-
-            # flat mentions and entities indices (mentions_num x embedding_dim)
-            flat_mentions_repr = mentions_repr[mention_lengths != 0]
             mentions_scores = torch.sigmoid(chosen_mention_logits)
 
-            # retrieve candidates top-1 ids and scores
-            cand_scores, cand_indices = self.lookup(
-                flat_mentions_repr.detach()
-            )
-
-            entities_repr = self.embeddings[cand_indices.to(self.embeddings.device)].to(self.device)
-
-            chosen_mention_limits: List[int] = (
-                chosen_mention_mask.int().sum(-1).detach().cpu().tolist()
-            )
-            flat_mentions_scores = mentions_scores[mention_lengths != 0].unsqueeze(-1)
-            cand_scores = cand_scores.unsqueeze(-1)
-
-            el_scores = torch.sigmoid(
-                self.task.el_encoder(
-                    flat_mentions_repr,
-                    entities_repr,
-                    flat_mentions_scores,
-                    cand_scores,
-                )
-            ).squeeze(1)
-
         predictions = []
-        cand_idx = 0
         example_idx = 0
-        for offsets, lengths, md_scores in zip(
-            mention_offsets, mention_lengths, mentions_scores
-        ):
+        for offsets, lengths, md_scores in zip(mention_offsets, mention_lengths, mentions_scores):
             ex_sp_offsets = []
             ex_sp_lengths = []
-            ex_entities = []
             ex_md_scores = []
-            ex_el_scores = []
+            
             for offset, length, md_score in zip(offsets, lengths, md_scores):
-                if length != 0:
-                    if md_score >= self.task.md_threshold:
-                        ex_sp_offsets.append(offset.detach().cpu().item())
-                        ex_sp_lengths.append(length.detach().cpu().item())
-                        ex_entities.append(self.ent_idx[cand_indices[cand_idx].detach().cpu().item()])
-                        ex_md_scores.append(md_score.item())       
-                        ex_el_scores.append(el_scores[cand_idx].item())     
-                    cand_idx += 1
+                if length != 0 and md_score >= self.task.md_threshold:
+                    ex_sp_offsets.append(offset.detach().cpu().item())
+                    ex_sp_lengths.append(length.detach().cpu().item())
+                    ex_md_scores.append(md_score.item())       
 
             char_offsets, char_lengths = convert_sp_to_char_offsets(
                 texts[example_idx],
@@ -215,14 +286,13 @@ class ModelEval:
                 {
                     "offsets": char_offsets,
                     "lengths": char_lengths,
-                    "entities": ex_entities,
                     "md_scores": ex_md_scores,
-                    "el_scores": ex_el_scores,
                 }
             )
             example_idx += 1
 
         return predictions
+
 
     def process_disambiguation_batch(self, texts, mention_offsets, mention_lengths, entities):
         batch: Dict[str, Any] = {
